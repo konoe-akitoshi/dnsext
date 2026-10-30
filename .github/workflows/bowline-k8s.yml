@@ -1,0 +1,44 @@
+name: Bowline Kubernetes image
+on:
+  push:
+    branches: [main]
+    paths: [containers/bowline/**, .github/workflows/bowline-k8s.yml]
+  pull_request:
+    paths: [containers/bowline/**, .github/workflows/bowline-k8s.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build verified release
+        run: docker build --tag bowline-k8s:test containers/bowline
+      - name: Smoke test non-root and read-only runtime
+        run: |
+          docker run -d --name bowline-test --read-only --cap-drop ALL \
+            --security-opt no-new-privileges bowline-k8s:test
+          for attempt in $(seq 1 30); do
+            if docker exec bowline-test /usr/local/bin/bowline-health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs bowline-test
+          exit 1
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+          image=ghcr.io/${{ github.repository_owner }}/bowline-k8s
+          docker tag bowline-k8s:test "$image:sha-${{ github.sha }}"
+          docker tag bowline-k8s:test "$image:pre-release-20260209-r1"
+          docker push "$image:sha-${{ github.sha }}"
+          docker push "$image:pre-release-20260209-r1"
+      - name: Runtime log
+        if: always()
+        run: docker logs bowline-test || true
